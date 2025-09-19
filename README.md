@@ -8,6 +8,12 @@ This directory is the FS_ROOT exposed by your MCP server. It includes a minimal 
 - notes/ — scratchpad
 
 ## Quick start (server)
+Prerequisites:
+
+- Python 3.9+ with the `venv` module available (on Debian/Ubuntu install via `apt install python3 python3-venv`).
+
+The helper script will reuse the active virtualenv if you already have one selected. Otherwise it will create `.venv/` in the repo root on first run and install the server requirements automatically.
+
 Run from the host (outside the jail):
 
 ```bash
