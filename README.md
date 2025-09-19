@@ -14,7 +14,7 @@ Prerequisites:
 
 The helper script will reuse the active virtualenv if you already have one selected. Otherwise it will create `.venv/` in the repo root on first run and install the server requirements automatically.
 
-Run from the host (outside the jail):
+Run from the host (outside the jail). Ensure port 8000 is exposed in the environment where the server runs so the proxy URL above can reach it. Then run:
 
 ```bash
 # from the repo root (defaults auto-detect this checkout)
