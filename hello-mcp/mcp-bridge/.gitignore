@@ -1,0 +1,8 @@
+# MCP bridge artifacts
+uploads/tmp/
+outbox/
+inbox/
+
+# Logs / PIDs
+*.pid
+*.log

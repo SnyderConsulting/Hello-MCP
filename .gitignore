@@ -1,0 +1,28 @@
+# FS_ROOT (inside jail) artifacts
+hello-mcp/mcp-bridge/inbox/ 
+hello-mcp/mcp-bridge/outbox/ 
+hello-mcp/mcp-bridge/uploads/tmp/
+
+# Local env
+.venv/
+
+# Logs / PIDs
+*.log 
+*.pid 
+mcp-fs/server.log 
+mcp-fs/server.pid
+
+# Archives
+*.zip
+
+# RunPod meta clutter
+=0.30 
+=1.0.0
+
+# Optional: keep structure but not contents
+hello-mcp/samples/ 
+hello-mcp/notes/*
+!hello-mcp/notes/.gitkeep
+
+# Python build junk
+__pycache__/
