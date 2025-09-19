@@ -25,6 +25,7 @@ MCP_ENABLE_WRITE="${MCP_ENABLE_WRITE:-0}"    # set 1 to allow write_file
 MCP_ENABLE_EXEC="${MCP_ENABLE_EXEC:-0}"      # set 1 to allow run
 LOG="${LOG:-$APP_DIR/server.log}"
 PIDFILE="${PIDFILE:-$APP_DIR/server.pid}"
+PYTHON_CMD="${PYTHON_CMD:-}"
 
 UPDATE_DEPS=1
 FOREGROUND=0
@@ -81,19 +82,56 @@ ensure_dirs() {
   [[ -f "$SERVER" ]] || die "server.py not found at: $SERVER"
 }
 
-make_venv() {
-  if [[ ! -x "$VENV/bin/python" ]]; then
-    info "Creating venv at $VENV"
-    python3 -m venv "$VENV"
+resolve_python() {
+  if [[ -n "${PYTHON_CMD:-}" ]]; then
+    return 0
   fi
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_CMD="python3"
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    PYTHON_CMD="python"
+    return 0
+  fi
+  die "python3 not found. Install Python 3.9+ and rerun."
+}
+
+make_venv() {
+  if [[ "$VENV" == "$REPO_ROOT/.venv" && -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/python" && ! -d "$VENV" ]]; then
+    info "Using already active virtualenv at $VIRTUAL_ENV"
+    VENV="$VIRTUAL_ENV"
+  fi
+
+  if [[ ! -x "$VENV/bin/python" ]]; then
+    resolve_python
+    info "Creating venv at $VENV"
+    "$PYTHON_CMD" -m venv "$VENV" || die "Failed to create virtualenv at $VENV (ensure python3-venv is installed)."
+  fi
+
+  local activate="$VENV/bin/activate"
+  if [[ ! -f "$activate" ]]; then
+    die "Virtualenv activation script missing at $activate. Delete $VENV and rerun this script."
+  fi
+
   # shellcheck disable=SC1090
-  source "$VENV/bin/activate"
+  source "$activate"
+
   if (( UPDATE_DEPS )); then
     info "Installing/Updating Python deps…"
-    pip install -U pip >/dev/null
-    pip install -U "mcp[cli]" "uvicorn>=0.30" "starlette>=0.38" >/dev/null
+    "$VENV/bin/python" -m pip install -U pip >/dev/null
+    if [[ -f "$REPO_ROOT/requirements.txt" ]]; then
+      "$VENV/bin/python" -m pip install -U -r "$REPO_ROOT/requirements.txt" >/dev/null
+    else
+      "$VENV/bin/python" -m pip install -U "mcp[cli]" "uvicorn>=0.30" "starlette>=0.38" >/dev/null
+    fi
   fi
-  ok "Python: $("$VENV/bin/python" -V), Uvicorn: $(python -c 'import uvicorn, sys; print(uvicorn.__version__)')"
+
+  local uvicorn_version="not installed"
+  if "$VENV/bin/python" -c "import uvicorn" >/dev/null 2>&1; then
+    uvicorn_version="$("$VENV/bin/python" -c 'import uvicorn; print(uvicorn.__version__)')"
+  fi
+  ok "Python: $("$VENV/bin/python" -V), Uvicorn: $uvicorn_version"
 }
 
 stop_old() {
