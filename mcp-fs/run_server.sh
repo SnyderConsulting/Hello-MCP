@@ -2,19 +2,24 @@
 # run_server.sh — one-shot setup/runner for your RunPod MCP server
 # Usage examples:
 #   bash run_server.sh
-#   bash run_server.sh --fs-root /workspace/my-repo --public-url https://<POD_ID>-8000.proxy.runpod.net --enable-write
+#   bash run_server.sh --fs-root "$(pwd)/hello-mcp" --public-url https://<POD_ID>-8000.proxy.runpod.net --enable-write
 #   bash run_server.sh --foreground   # run in the foreground (good for debugging)
 #   bash run_server.sh --restart      # stop any old server and start fresh
 
 set -Eeuo pipefail
 
 # ---------- defaults ----------
-APP_DIR="${APP_DIR:-/workspace/mcp-fs}"
+# Resolve repository locations based on this script's directory so the
+# defaults work no matter where the repo is cloned.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+
+APP_DIR="${APP_DIR:-$SCRIPT_DIR}"
 SERVER="${SERVER:-$APP_DIR/server.py}"
-VENV="${VENV:-/workspace/.venv}"
+VENV="${VENV:-$REPO_ROOT/.venv}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-FS_ROOT="${FS_ROOT:-/workspace/hello-mcp}"   # change to your repo root if you like
+FS_ROOT="${FS_ROOT:-$REPO_ROOT/hello-mcp}"   # change to your repo root if you like
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"       # e.g. https://<POD_ID>-8000.proxy.runpod.net
 MCP_ENABLE_WRITE="${MCP_ENABLE_WRITE:-0}"    # set 1 to allow write_file
 MCP_ENABLE_EXEC="${MCP_ENABLE_EXEC:-0}"      # set 1 to allow run

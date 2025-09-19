@@ -11,8 +11,8 @@ This directory is the FS_ROOT exposed by your MCP server. It includes a minimal 
 Run from the host (outside the jail):
 
 ```bash
-/workspace/mcp-fs/run_server.sh --restart \
-  --fs-root /workspace/hello-mcp \
+# from the repo root (defaults auto-detect this checkout)
+./mcp-fs/run_server.sh --restart \
   --public-url "https://<POD_ID>-8000.proxy.runpod.net" \
   --enable-write --enable-exec --foreground
 ```
