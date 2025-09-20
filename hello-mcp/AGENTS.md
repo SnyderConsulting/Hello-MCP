@@ -11,6 +11,9 @@ These instructions cover the entire `hello-mcp/` tree, which serves as the prima
 - Treat `hello-mcp/notes/` as the shared knowledge base for this project. Create new files or append to existing ones rather than rewriting history.
 - Start each entry with an ISO-8601 UTC timestamp and a concise summary so future agents can follow the timeline.
 - Capture lessons learned, troubleshooting steps, environment tips, and other actionable context that would help successors.
+- Maintain an always-current worklog in `hello-mcp/notes/` that documents the active user goal, the plan for satisfying it, and any results or follow-up tasks.
+- Add a new note entry whenever the user introduces a new goal or updates an existing goal, and update the worklog as plans evolve or milestones are reached.
+- Ensure notes provide enough context that a new contributor can understand the current state of the effort and seamlessly continue the work.
 - JSONL logs created by MCP tools (for example `hello-mcp/notes/resource_requests.jsonl` or `hello-mcp/notes/admin_feedback.jsonl`) should only be modified through those tools—do not edit them manually.
 - Never store secrets or credentials in `notes/`. If you encounter sensitive information, notify the admins using the feedback tool immediately.
 
