@@ -4,9 +4,14 @@
 import argparse
 import base64
 import contextlib
+import json
 import mimetypes
 import os
 import re
+import signal
+import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +21,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route
 import uvicorn
 
-import hashlib, shlex, subprocess, time
+import hashlib, shlex, subprocess
 
 ENABLE_WRITE = os.environ.get("MCP_ENABLE_WRITE", "0") == "1"
 ENABLE_EXEC  = os.environ.get("MCP_ENABLE_EXEC",  "0") == "1"
@@ -365,8 +370,7 @@ def run(
     if not cmd:
         return {"error": "empty_command"}
 
-    default_allow = ["python", "pip", "uv", "pytest", "bash", "git", "nvidia-smi", "ls", "cat", "head", "tail"]
-    allow = set(allowlist or default_allow)
+    allow = set(allowlist or _default_allow())
     exe = cmd if isinstance(cmd, str) else cmd[0]
     if shell:
         exe = "bash"
@@ -422,6 +426,274 @@ def run(
         "cwd": str(workdir.relative_to(FS_ROOT)),
         "cmd": cmd if isinstance(cmd, list) else [cmd],
     }
+
+# ----------------------- Background job manager (no timeouts) -----------------------
+
+JOBS: Dict[str, Dict[str, Any]] = {}  # in-memory (augments on-disk metadata)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _jobs_root() -> Path:
+    d = FS_ROOT / ".mcp_jobs"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _job_dir(job_id: str) -> Path:
+    d = _jobs_root() / job_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _job_meta_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "job.json"
+
+
+def _job_log_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "stdout_stderr.log"
+
+
+def _write_json(path: Path, obj: Dict[str, Any]) -> None:
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(obj, indent=2, ensure_ascii=False))
+    tmp.replace(path)
+
+
+def _read_json(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {}
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # can't signal but likely exists
+
+
+def _default_allow() -> List[str]:
+    return ["python", "pip", "uv", "pytest", "bash", "git", "nvidia-smi", "ls", "cat", "head", "tail"]
+
+
+@mcp.tool()
+def job_start(
+    cmd: List[str] | str,
+    cwd: str = ".",
+    env: Optional[Dict[str, str]] = None,
+    shell: bool = False,
+    name: Optional[str] = None,
+    allowlist: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Start a detached process whose stdout/stderr are tee'd to a log file.
+    Returns {job_id, pid, log_path, log_url}.
+    """
+
+    workdir = safe_join(FS_ROOT, cwd or ".")
+    if isinstance(cmd, str) and not shell:
+        cmd = shlex.split(cmd)
+    if not cmd:
+        return {"error": "empty_command"}
+
+    # allowlist gate
+    allow = set(allowlist or _default_allow())
+    exe = "bash" if shell else (cmd if isinstance(cmd, str) else cmd[0])
+    base_exe = os.path.basename(exe if isinstance(exe, str) else str(exe))
+    if base_exe not in allow:
+        return {"error": "denied_by_allowlist", "exe": base_exe, "allow": sorted(allow)}
+
+    job_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    log_path = _job_log_path(job_id)
+
+    # Build env
+    env_final = os.environ.copy()
+    if env:
+        for k, v in env.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                return {"error": "env_must_be_str_kv"}
+            env_final[k] = v
+
+    # Open log file in append; create new process group (for group kill)
+    with open(log_path, "ab", buffering=0) as lf:
+        lf.write(f"[{_now_iso()}] job_start {job_id} name={name or ''} cmd={cmd}\n".encode("utf-8"))
+    proc = subprocess.Popen(
+        cmd if not shell else " ".join(cmd if isinstance(cmd, list) else [cmd]),
+        cwd=str(workdir),
+        env=env_final,
+        shell=shell,
+        stdout=open(log_path, "ab", buffering=0),
+        stderr=open(log_path, "ab", buffering=0),
+        start_new_session=True,  # new process group, so we can kill children
+    )
+
+    meta = {
+        "id": job_id,
+        "pid": proc.pid,
+        "name": name,
+        "cmd": cmd if isinstance(cmd, list) else [cmd],
+        "cwd": str(workdir.relative_to(FS_ROOT)),
+        "shell": shell,
+        "allowlist": sorted(list(allow)),
+        "started_at": _now_iso(),
+        "finished_at": None,
+        "returncode": None,
+        "log_path": str(log_path.relative_to(FS_ROOT)),
+    }
+    _write_json(_job_meta_path(job_id), meta)
+    JOBS[job_id] = {"popen": proc, "meta": meta, "log_path": str(log_path)}
+
+    public_base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
+    log_url = f"{public_base}/raw/{meta['log_path']}" if public_base else None
+    return {"job_id": job_id, "pid": proc.pid, "log_path": meta["log_path"], "log_url": log_url}
+
+
+@mcp.tool()
+def job_status(job_id: str) -> Dict[str, Any]:
+    meta = _read_json(_job_meta_path(job_id))
+    if not meta:
+        return {"error": "not_found", "job_id": job_id}
+
+    proc = JOBS.get(job_id, {}).get("popen")
+    if proc is not None:
+        rc = proc.poll()
+        if rc is None:
+            alive = True
+        else:
+            alive = False
+            meta["finished_at"] = meta.get("finished_at") or _now_iso()
+            meta["returncode"] = rc
+            _write_json(_job_meta_path(job_id), meta)
+    else:
+        alive = _pid_alive(meta.get("pid", -1))
+        # returncode unknown unless we’re the parent; leave as-is
+
+    return {
+        "job_id": job_id,
+        "running": alive,
+        "pid": meta.get("pid"),
+        "returncode": meta.get("returncode"),
+        "started_at": meta.get("started_at"),
+        "finished_at": meta.get("finished_at"),
+        "cwd": meta.get("cwd"),
+        "name": meta.get("name"),
+        "log_path": meta.get("log_path"),
+    }
+
+
+@mcp.tool()
+def job_list(limit: int = 50) -> Dict[str, Any]:
+    root = _jobs_root()
+    jobs = []
+    for d in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
+        if not d.is_dir():
+            continue
+        meta = _read_json(d / "job.json")
+        if meta:
+            jobs.append(
+                {
+                    "job_id": meta.get("id"),
+                    "name": meta.get("name"),
+                    "started_at": meta.get("started_at"),
+                    "returncode": meta.get("returncode"),
+                }
+            )
+        if len(jobs) >= limit:
+            break
+    return {"jobs": jobs}
+
+
+@mcp.tool()
+def job_logs(job_id: str, offset: int = 0, max_bytes: int = 200_000, follow_ms: int = 0) -> Dict[str, Any]:
+    """
+    Return a chunk of the job log starting at byte 'offset', and the next_offset.
+    If follow_ms > 0, wait up to that many milliseconds for new data (max ~25s).
+    """
+
+    logp = _job_log_path(job_id)
+    if not logp.exists():
+        return {"error": "not_found"}
+    wait_deadline = time.time() + min(max(follow_ms, 0), 25_000) / 1000.0
+    next_offset = offset
+    while True:
+        size = logp.stat().st_size
+        if size > offset:
+            with logp.open("rb") as f:
+                f.seek(offset)
+                data = f.read(max_bytes)
+            next_offset = offset + len(data)
+            content = {
+                "kind": "text",
+                "text": data.decode("utf-8", errors="replace"),
+                "truncated": len(data) == max_bytes,
+            }
+            st = job_status(job_id)  # returns current running state
+            return {
+                "job_id": job_id,
+                "offset": offset,
+                "next_offset": next_offset,
+                "running": st.get("running", False),
+                "content": content,
+            }
+        if time.time() >= wait_deadline or follow_ms <= 0:
+            st = job_status(job_id)
+            return {
+                "job_id": job_id,
+                "offset": offset,
+                "next_offset": size,
+                "running": st.get("running", False),
+                "content": {"kind": "text", "text": "", "truncated": False},
+            }
+        time.sleep(0.2)
+
+
+@mcp.tool()
+def job_stop(job_id: str, sig: int = 15, kill_children: bool = True, wait_ms: int = 5000) -> Dict[str, Any]:
+    """
+    Send a signal to the job (default TERM). If kill_children=True, signal the process group.
+    Escalate to SIGKILL after wait_ms if still running.
+    """
+
+    meta = _read_json(_job_meta_path(job_id))
+    if not meta:
+        return {"error": "not_found", "job_id": job_id}
+    pid = int(meta.get("pid", -1))
+    if pid <= 0:
+        return {"error": "bad_pid"}
+
+    def _signal(sig_to_send: int):
+        try:
+            if kill_children:
+                os.killpg(pid, sig_to_send)
+            else:
+                os.kill(pid, sig_to_send)
+            return True
+        except ProcessLookupError:
+            return False
+        except Exception as e:
+            return {"error": f"signal_failed: {e}"}
+
+    _signal(sig)
+    deadline = time.time() + max(0, wait_ms) / 1000.0
+    while _pid_alive(pid) and time.time() < deadline:
+        time.sleep(0.1)
+    if _pid_alive(pid):
+        _signal(signal.SIGKILL)
+        return {"job_id": job_id, "killed": True}
+    else:
+        meta["finished_at"] = meta.get("finished_at") or _now_iso()
+        # we can’t reliably get returncode unless we were the parent; leave as-is
+        _write_json(_job_meta_path(job_id), meta)
+        return {"job_id": job_id, "stopped": True}
 
 # --------------------------- ASGI app & gateway -----------------------------
 
