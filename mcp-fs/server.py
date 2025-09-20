@@ -107,6 +107,7 @@ def list_dir(
     dirs_only: bool = False,
     max_entries: int = 500,
 ) -> List[Dict[str, Any]]:
+    """Return directory metadata under ``path`` with optional filters and depth controls."""
     base = safe_join(FS_ROOT, path)
     results: List[Dict[str, Any]] = []
     if not base.exists():
@@ -148,6 +149,7 @@ def list_dir(
 
 @mcp.tool()
 def stat(path: str) -> Dict[str, Any]:
+    """Return metadata for a single filesystem entry relative to ``FS_ROOT``."""
     p = safe_join(FS_ROOT, path)
     if not p.exists():
         return {"error": "not_found"}
@@ -155,6 +157,7 @@ def stat(path: str) -> Dict[str, Any]:
 
 @mcp.tool()
 def read_file(path: str, offset: int = 0, max_bytes: int = 256_000) -> Dict[str, Any]:
+    """Read up to ``max_bytes`` from a file starting at ``offset`` inside ``FS_ROOT``."""
     p = safe_join(FS_ROOT, path)
     if not p.exists() or not p.is_file():
         return {"error": "not_found"}
@@ -180,6 +183,7 @@ def search(
     max_results: int = 100,
     include_hidden: bool = False,
 ) -> Dict[str, Any]:
+    """Search for ``query`` within filenames or file contents under ``path``."""
     base = safe_join(FS_ROOT, path or ".")
     if not base.exists():
         return {"results": []}
@@ -219,6 +223,7 @@ def search(
 
 @mcp.tool()
 def fetch(id: str, max_bytes: int = 512_000, as_text: bool = True) -> Dict[str, Any]:
+    """Retrieve file content and metadata for a previously discovered item."""
     p = safe_join(FS_ROOT, id)
     if not p.exists() or not p.is_file():
         return {"error": "not_found", "id": id}
@@ -559,6 +564,7 @@ def job_start(
 
 @mcp.tool()
 def job_status(job_id: str) -> Dict[str, Any]:
+    """Return the latest known status for a background job."""
     meta = _read_json(_job_meta_path(job_id))
     if not meta:
         return {"error": "not_found", "job_id": job_id}
@@ -592,6 +598,7 @@ def job_status(job_id: str) -> Dict[str, Any]:
 
 @mcp.tool()
 def job_list(limit: int = 50) -> Dict[str, Any]:
+    """List the most recent background jobs up to ``limit`` entries."""
     root = _jobs_root()
     jobs = []
     for d in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
