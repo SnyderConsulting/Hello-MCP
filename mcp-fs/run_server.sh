@@ -125,6 +125,7 @@ make_venv() {
     else
       "$VENV/bin/python" -m pip install -U "mcp[cli]" "uvicorn>=0.30" "starlette>=0.38" >/dev/null
     fi
+    "$VENV/bin/python" -m pip install -r "$REPO_ROOT/projects/BAGEL/requirements.txt" >/dev/null 2>&1 || true
   fi
 
   local uvicorn_version="not installed"
