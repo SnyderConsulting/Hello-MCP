@@ -69,6 +69,24 @@ def read_text_safely(p: Path, max_bytes: int) -> Dict[str, Any]:
 def _sha256_bytes(b: bytes) -> str:
     h = hashlib.sha256(); h.update(b); return h.hexdigest()
 
+
+def _normalize_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
+
+
+def _record_agent_note(rel_path: str, entry: Dict[str, Any]) -> str:
+    path = safe_join(FS_ROOT, rel_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    return str(path.relative_to(FS_ROOT))
+
 # ----------------------------- MCP server setup -----------------------------
 
 mcp = FastMCP(
@@ -932,6 +950,93 @@ def gpu_info() -> Dict[str, Any]:
         )
 
     return {"available": bool(gpus), "gpus": gpus}
+
+
+@mcp.tool()
+def request_additional_resources(
+    summary: str,
+    details: Optional[str] = None,
+    urgency: str = "normal",
+    contact: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Log a request for extra resources, permissions, or tooling."""
+
+    summary_clean = (summary or "").strip()
+    if not summary_clean:
+        return {"error": "summary_required"}
+
+    details_clean = details.strip() if details and details.strip() else None
+    urgency_raw = (urgency or "normal").strip()
+    urgency_norm = urgency_raw.lower()
+    allowed = {"low", "normal", "high", "critical"}
+    if urgency_norm not in allowed:
+        urgency_norm = "normal"
+
+    entry: Dict[str, Any] = {
+        "id": uuid.uuid4().hex,
+        "submitted_at": _now_iso(),
+        "summary": summary_clean,
+        "urgency": urgency_norm,
+    }
+    if details_clean:
+        entry["details"] = details_clean
+    if urgency_raw and urgency_raw.lower() != urgency_norm:
+        entry["reported_urgency"] = urgency_raw
+    if contact and contact.strip():
+        entry["contact"] = contact.strip()
+
+    try:
+        log_path = _record_agent_note("hello-mcp/notes/resource_requests.jsonl", entry)
+    except Exception as e:
+        return {"error": f"failed_to_record: {e}"}
+
+    return {
+        "status": "recorded",
+        "request_id": entry["id"],
+        "log_path": log_path,
+        "request": entry,
+    }
+
+
+@mcp.tool()
+def admin_feedback(
+    message: str,
+    topic: str = "general",
+    allow_follow_up: Any = False,
+    contact: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Share questions, comments, or concerns with the admin team."""
+
+    message_clean = (message or "").strip()
+    if not message_clean:
+        return {"error": "message_required"}
+
+    topic_clean = (topic or "general").strip()
+    if not topic_clean:
+        topic_clean = "general"
+
+    entry: Dict[str, Any] = {
+        "id": uuid.uuid4().hex,
+        "submitted_at": _now_iso(),
+        "topic": topic_clean,
+        "message": message_clean,
+        "allow_follow_up": _normalize_bool(allow_follow_up),
+    }
+
+    if contact and contact.strip():
+        entry["contact"] = contact.strip()
+
+    try:
+        log_path = _record_agent_note("hello-mcp/notes/admin_feedback.jsonl", entry)
+    except Exception as e:
+        return {"error": f"failed_to_record: {e}"}
+
+    return {
+        "status": "recorded",
+        "feedback_id": entry["id"],
+        "log_path": log_path,
+        "feedback": entry,
+    }
 
 # --------------------------- ASGI app & gateway -----------------------------
 
