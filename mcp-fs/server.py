@@ -367,89 +367,6 @@ def write_file(
     }
 
 
-@mcp.tool()
-def run(
-    cmd: List[str] | str,
-    cwd: str = ".",
-    timeout_s: int = 30,
-    max_output: int = 200_000,
-    env: Optional[Dict[str, str]] = None,
-    allowlist: Optional[List[str]] = None,
-    shell: bool = False,
-) -> Dict[str, Any]:
-    """
-    Execute a bounded command under FS_ROOT.
-    - jail-scoped cwd
-    - timeout and output caps
-    - simple allowlist for the executable (default safe set)
-    NOTE: enable with MCP_ENABLE_EXEC=1
-    """
-    if not ENABLE_EXEC:
-        return {"error": "exec_disabled"}
-
-    workdir = safe_join(FS_ROOT, cwd or ".")
-    if isinstance(cmd, str) and not shell:
-        cmd = shlex.split(cmd)
-    if not cmd:
-        return {"error": "empty_command"}
-
-    allow = set(allowlist or _default_allow())
-    exe = cmd if isinstance(cmd, str) else cmd[0]
-    if shell:
-        exe = "bash"
-    base_exe = os.path.basename(exe)
-    if base_exe not in allow:
-        return {"error": "denied_by_allowlist", "exe": base_exe, "allow": sorted(allow)}
-
-    # Build environment
-    env_final = os.environ.copy()
-    if env:
-        for k, v in (env or {}).items():
-            if not isinstance(k, str) or not isinstance(v, str):  # keep it simple
-                return {"error": "env_must_be_str_kv"}
-            env_final[k] = v
-
-    start = time.time()
-    try:
-        proc = subprocess.run(
-            cmd if not shell else " ".join(cmd if isinstance(cmd, list) else [cmd]),
-            cwd=str(workdir),
-            env=env_final,
-            shell=shell,
-            capture_output=True,
-            timeout=timeout_s,
-        )
-        rc = proc.returncode
-        out = proc.stdout or b""
-        err = proc.stderr or b""
-    except subprocess.TimeoutExpired as e:
-        rc = -1
-        out = (e.stdout or b"") + b"\n[TIMEOUT]"
-        err = (e.stderr or b"") + b""
-    except Exception as e:
-        return {"error": f"exec_failed: {e}"}
-
-    def cap_and_decode(b: bytes) -> Dict[str, Any]:
-        truncated = len(b) > max_output
-        b = b[:max_output]
-        if is_probably_text(b[:4096]):
-            try:
-                t = b.decode("utf-8", errors="replace")
-            except Exception:
-                t = b.decode("latin-1", errors="replace")
-            return {"kind": "text", "text": t, "truncated": truncated}
-        return {"kind": "bytes", "base64": base64.b64encode(b).decode("ascii"), "truncated": truncated}
-
-    elapsed = time.time() - start
-    return {
-        "returncode": rc,
-        "stdout": cap_and_decode(out),
-        "stderr": cap_and_decode(err),
-        "elapsed_s": round(elapsed, 3),
-        "cwd": str(workdir.relative_to(FS_ROOT)),
-        "cmd": cmd if isinstance(cmd, list) else [cmd],
-    }
-
 # --------------------------- Background job manager ---------------------------
 
 JOBS: Dict[str, Dict[str, Any]] = {}  # in-memory (augments on-disk metadata)
@@ -629,6 +546,9 @@ def job_start(
     Returns ``{job_id, pid, log_path, log_url}``. ``timeout_s`` optionally sets a
     wall clock timeout after which the job is terminated automatically.
     """
+
+    if not ENABLE_EXEC:
+        return {"error": "exec_disabled"}
 
     workdir = safe_join(FS_ROOT, cwd or ".")
     if isinstance(cmd, str) and not shell:

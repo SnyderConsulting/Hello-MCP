@@ -23,12 +23,14 @@ Run from the host (outside the jail). Ensure port 8000 is exposed in the environ
   --enable-write --enable-exec --foreground
 ```
 
-## Smoke test (inside MCP via run tool)
-- Exec check: run `bash -lc "echo OK"`
-- Bridge check: `bash -lc "mcp-bridge/ops.sh self-test"`
+The `--enable-exec` flag enables the job tools that launch commands inside the jail.
+
+## Smoke test (inside MCP via job tools)
+- Exec check: call `job_start` with `cmd=["bash", "-lc", "echo OK"]` and confirm output via `job_logs`.
+- Bridge check: start `job_start` with `cmd=["bash", "-lc", "mcp-bridge/ops.sh self-test"]`.
 
 ## Notes
-- Exec allow-list can be extended via env: `MCP_EXEC_ALLOW="bash sh python python3 pip uv pytest git nvidia-smi ls cat head tail ops.sh"`.
-- If your client hides Exec until a tool is marked destructive, annotate `run` and `write_file` in server.py with `destructiveHint` (and `openWorldHint` for run).
+- Exec allow-list for job execution can be extended via env: `MCP_EXEC_ALLOW="bash sh python python3 pip uv pytest git nvidia-smi ls cat head tail ops.sh"`.
+- If your client hides Exec until a tool is marked destructive, annotate `job_start` and `write_file` in server.py with `destructiveHint` (and `openWorldHint` for job_start).
 - `job_start` accepts an optional `timeout_s` to auto-stop runaway processes, and `job_logs` understands `tail_lines`/negative `offset` plus `squash_repeats` to make tailing easier.
 - Use the new `gpu_info` tool to return a lightweight summary from `nvidia-smi` (when available).
