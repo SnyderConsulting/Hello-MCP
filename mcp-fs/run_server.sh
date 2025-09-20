@@ -22,7 +22,7 @@ PORT="${PORT:-8000}"
 FS_ROOT="${FS_ROOT:-$REPO_ROOT/hello-mcp}"   # change to your repo root if you like
 PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}"       # e.g. https://<POD_ID>-8000.proxy.runpod.net
 MCP_ENABLE_WRITE="${MCP_ENABLE_WRITE:-0}"    # set 1 to allow write_file
-MCP_ENABLE_EXEC="${MCP_ENABLE_EXEC:-0}"      # set 1 to allow run
+MCP_ENABLE_EXEC="${MCP_ENABLE_EXEC:-0}"      # set 1 to allow job tools (job_start, etc.)
 LOG="${LOG:-$APP_DIR/server.log}"
 PIDFILE="${PIDFILE:-$APP_DIR/server.pid}"
 PYTHON_CMD="${PYTHON_CMD:-}"
@@ -42,7 +42,7 @@ Options:
   --host IP               Host to bind (default: $HOST)
   --public-url URL        Public base URL (adds clickable links in fetch())
   --enable-write          Enable write_file tool (default off)
-  --enable-exec           Enable run tool (default off)
+  --enable-exec           Enable job tools (default off)
   --no-update             Skip pip install/upgrade
   --server PATH           Path to server.py (default: $SERVER)
   --foreground            Run in foreground (logs to stdout)
@@ -205,7 +205,7 @@ print_summary() {
   echo "FS_ROOT          : $FS_ROOT"
   echo "Host/Port        : $HOST:$PORT"
   echo "Write enabled    : $MCP_ENABLE_WRITE"
-  echo "Exec enabled     : $MCP_ENABLE_EXEC"
+  echo "Exec enabled     : $MCP_ENABLE_EXEC (job tools)"
   [[ -n "$PUBLIC_BASE_URL" ]] && echo "Public base URL   : $PUBLIC_BASE_URL"
   echo
   echo "Proxy URL (RunPod): https://<POD_ID>-$PORT.proxy.runpod.net"
