@@ -28,5 +28,7 @@ Run from the host (outside the jail). Ensure port 8000 is exposed in the environ
 - Bridge check: `bash -lc "mcp-bridge/ops.sh self-test"`
 
 ## Notes
-- Exec allow-list can be extended via env: `MCP_EXEC_ALLOW="bash sh python pip uv pytest git nvidia-smi ls cat head tail ops.sh"`.
+- Exec allow-list can be extended via env: `MCP_EXEC_ALLOW="bash sh python python3 pip uv pytest git nvidia-smi ls cat head tail ops.sh"`.
 - If your client hides Exec until a tool is marked destructive, annotate `run` and `write_file` in server.py with `destructiveHint` (and `openWorldHint` for run).
+- `job_start` accepts an optional `timeout_s` to auto-stop runaway processes, and `job_logs` understands `tail_lines`/negative `offset` plus `squash_repeats` to make tailing easier.
+- Use the new `gpu_info` tool to return a lightweight summary from `nvidia-smi` (when available).
