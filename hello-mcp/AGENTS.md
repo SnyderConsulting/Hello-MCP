@@ -2,6 +2,27 @@
 
 These instructions cover the entire `hello-mcp/` tree, which serves as the primary workspace for agents in this environment.
 
+## Quick Onboarding Walkthrough (10–15 min)
+1. **GPU & environment check**
+   - Call `gpu_info()` → confirm an available A100 (or note otherwise).
+   - `job_list(limit=50)` → skim recent runs; pick the latest active/failed job IDs.
+   - `job_logs(job_id, tail_lines=200, squash_repeats=true)` → understand why a run stopped.
+2. **Read me first (local docs & layout)**
+   - Open `AGENTS.md` (this file), `scripts/`, and `projects/BAGEL/README.md` for project goals.
+   - Skim `results/log.txt` for the most recent training loop metrics and argument changes.
+3. **Artifacts & data sanity**
+   - List checkpoints under `results/checkpoints/` (size/date).
+   - Inspect dataset config(s), e.g. `projects/BAGEL/data/configs/src_ref_edit.yaml`.
+   - If packer is skipping many samples, confirm `expected_num_tokens` vs `max_num_tokens_per_sample`.
+4. **Try a smoke test (inference)**
+   - Use `projects/BAGEL/scripts/test_ckpt_infer.py` which targets the latest checkpoint by default.
+   - If you need to change the path, set `CKPT_PATH` in that script.
+5. **If you need to relaunch training**
+   - Start with `scripts/run_bagel_train_src_ref_edit.sh` and tune via env vars: `STEPS`, `TOKENS`, `LR`, `NUM_WORKERS`.
+   - For clearer errors, consider adding `CUDA_LAUNCH_BLOCKING=1` (and optionally avoid elastic once to expose the raw traceback).
+6. **Write a short worklog**
+   - Create or append a `notes/` entry with UTC timestamp and a concise summary of what you checked/changed and why.
+
 ## Collaboration basics
 - Prefer the MCP tools defined in `mcp-fs/server.py` for file access, searches, communication, and job control instead of recreating their functionality.
 - Keep commits focused and well-documented so other agents can quickly understand why a change was made.
