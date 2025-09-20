@@ -1,0 +1,25 @@
+# Agent Guidelines for the `hello-mcp` Workspace
+
+These instructions cover the entire `hello-mcp/` tree, which serves as the primary workspace for agents in this environment.
+
+## Collaboration basics
+- Prefer the MCP tools defined in `mcp-fs/server.py` for file access, searches, communication, and job control instead of recreating their functionality.
+- Keep commits focused and well-documented so other agents can quickly understand why a change was made.
+- When you touch code or configuration, update related documentation within the same change set to keep guidance in sync.
+
+## Knowledge sharing via `notes/`
+- Treat `hello-mcp/notes/` as the shared knowledge base for this project. Create new files or append to existing ones rather than rewriting history.
+- Start each entry with an ISO-8601 UTC timestamp and a concise summary so future agents can follow the timeline.
+- Capture lessons learned, troubleshooting steps, environment tips, and other actionable context that would help successors.
+- JSONL logs created by MCP tools (for example `hello-mcp/notes/resource_requests.jsonl` or `hello-mcp/notes/admin_feedback.jsonl`) should only be modified through those tools—do not edit them manually.
+- Never store secrets or credentials in `notes/`. If you encounter sensitive information, notify the admins using the feedback tool immediately.
+
+## Communication with admins
+- Use the `request_additional_resources` tool to log requests for new permissions, assets, or hardware. Submissions are appended to `hello-mcp/notes/resource_requests.jsonl` for tracking.
+- Use the `admin_feedback` tool to share questions, comments, or concerns with the admin team. These entries are logged in `hello-mcp/notes/admin_feedback.jsonl`.
+- Keep submissions professional and informative; they are part of the shared knowledge base.
+
+## Safety and consistency
+- Automations and scripts must respect the repository layout and should not assume write access outside the sandbox.
+- Keep secrets or credentials out of this tree. If any are discovered, stop and report them immediately via `admin_feedback`.
+- Avoid leaving ad-hoc notes in code or commit messages—use the shared `notes/` area instead.

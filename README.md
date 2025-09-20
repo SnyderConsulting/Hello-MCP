@@ -5,7 +5,7 @@ This directory is the FS_ROOT exposed by your MCP server. It includes a minimal 
 ## Structure
 - mcp-bridge/ — helpers for reliable file transfers (ops.sh, inbox/, outbox/, uploads/tmp/)
 - scripts/ — local helper scripts (e.g., smoke.sh)
-- notes/ — scratchpad
+- hello-mcp/notes/ — shared knowledge base and log area
 
 ## Quick start (server)
 Prerequisites:
