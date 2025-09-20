@@ -1,3 +1,5 @@
+> **Start here (stateless agent contract):** Read `AGENT_ONBOARDING.md` first to understand the model’s capabilities & limits and how to launch long GPU jobs via MCP. Then continue with this file for workspace specifics.
+
 # Agent Guidelines for the `hello-mcp` Workspace
 
 These instructions cover the entire `hello-mcp/` tree, which serves as the primary workspace for agents in this environment.
