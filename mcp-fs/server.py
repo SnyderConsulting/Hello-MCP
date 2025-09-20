@@ -21,7 +21,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Mount, Route
 import uvicorn
 
-import hashlib, shlex, subprocess
+import hashlib, shlex, subprocess, threading
 
 ENABLE_WRITE = os.environ.get("MCP_ENABLE_WRITE", "0") == "1"
 ENABLE_EXEC  = os.environ.get("MCP_ENABLE_EXEC",  "0") == "1"
@@ -432,13 +432,17 @@ def run(
         "cmd": cmd if isinstance(cmd, list) else [cmd],
     }
 
-# ----------------------- Background job manager (no timeouts) -----------------------
+# --------------------------- Background job manager ---------------------------
 
 JOBS: Dict[str, Dict[str, Any]] = {}  # in-memory (augments on-disk metadata)
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _iso_from_timestamp(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
 def _jobs_root() -> Path:
@@ -459,6 +463,95 @@ def _job_meta_path(job_id: str) -> Path:
 
 def _job_log_path(job_id: str) -> Path:
     return _job_dir(job_id) / "stdout_stderr.log"
+
+
+def _tail_offset(path: Path, lines: int) -> int:
+    """Return the byte offset that starts the final ``lines`` of ``path``."""
+    if lines <= 0:
+        return 0
+
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+    if size == 0:
+        return 0
+
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        block_size = 8192
+        buffer = b""
+        pos = end
+        newline_count = 0
+
+        while pos > 0 and newline_count <= lines:
+            read_size = min(block_size, pos)
+            pos -= read_size
+            f.seek(pos)
+            chunk = f.read(read_size)
+            buffer = chunk + buffer
+            newline_count += chunk.count(b"\n")
+            if pos == 0:
+                break
+
+        endswith_newline = buffer.endswith(b"\n")
+        total_lines = newline_count + (0 if endswith_newline else 1)
+        if total_lines <= lines:
+            return 0
+
+        skip = total_lines - lines
+        if skip <= 0:
+            return 0
+
+        seen = 0
+        for idx, byte in enumerate(buffer):
+            if byte == 10:  # "\n"
+                seen += 1
+                if seen == skip:
+                    return pos + idx + 1
+
+        return 0
+
+
+def _squash_repeats(text: str, threshold: int = 3) -> str:
+    """Collapse consecutive duplicate lines if they exceed ``threshold``."""
+
+    if threshold <= 0:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return text
+
+    parts: List[str] = []
+    prev = None
+    count = 0
+
+    def flush(line: Optional[str], repetitions: int) -> None:
+        if line is None or repetitions <= 0:
+            return
+        if repetitions <= threshold:
+            parts.append(line * repetitions)
+            return
+
+        parts.append(line)
+        if line.endswith("\n"):
+            parts.append(f"[... repeated {repetitions - 1} more times ...]\n")
+        else:
+            parts.append(f"\n[... repeated {repetitions - 1} more times ...]")
+
+    for line in lines:
+        if line == prev:
+            count += 1
+        else:
+            flush(prev, count)
+            prev = line
+            count = 1
+
+    flush(prev, count)
+    return "".join(parts)
 
 
 def _write_json(path: Path, obj: Dict[str, Any]) -> None:
@@ -487,7 +580,20 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _default_allow() -> List[str]:
-    return ["python", "pip", "uv", "pytest", "bash", "git", "nvidia-smi", "ls", "cat", "head", "tail"]
+    return [
+        "python",
+        "python3",
+        "pip",
+        "uv",
+        "pytest",
+        "bash",
+        "git",
+        "nvidia-smi",
+        "ls",
+        "cat",
+        "head",
+        "tail",
+    ]
 
 
 @mcp.tool()
@@ -498,10 +604,12 @@ def job_start(
     shell: bool = False,
     name: Optional[str] = None,
     allowlist: Optional[List[str]] = None,
+    timeout_s: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """
-    Start a detached process whose stdout/stderr are tee'd to a log file.
-    Returns {job_id, pid, log_path, log_url}.
+    """Start a detached process whose stdout/stderr stream to a log file.
+
+    Returns ``{job_id, pid, log_path, log_url}``. ``timeout_s`` optionally sets a
+    wall clock timeout after which the job is terminated automatically.
     """
 
     workdir = safe_join(FS_ROOT, cwd or ".")
@@ -541,6 +649,13 @@ def job_start(
         start_new_session=True,  # new process group, so we can kill children
     )
 
+    timeout_deadline = None
+    if timeout_s is not None:
+        if not isinstance(timeout_s, int) or timeout_s < 0:
+            return {"error": "timeout_s_must_be_non_negative_int"}
+        if timeout_s > 0:
+            timeout_deadline = time.time() + timeout_s
+
     meta = {
         "id": job_id,
         "pid": proc.pid,
@@ -554,8 +669,36 @@ def job_start(
         "returncode": None,
         "log_path": str(log_path.relative_to(FS_ROOT)),
     }
+
+    if timeout_deadline is not None:
+        meta["timeout_s"] = timeout_s
+        meta["timeout_at"] = _iso_from_timestamp(timeout_deadline)
+        meta["timed_out"] = False
+
     _write_json(_job_meta_path(job_id), meta)
     JOBS[job_id] = {"popen": proc, "meta": meta, "log_path": str(log_path)}
+
+    if timeout_deadline is not None:
+        def _auto_timeout():
+            remaining = timeout_deadline - time.time()
+            if remaining > 0:
+                time.sleep(remaining)
+            if proc.poll() is not None:
+                return
+            try:
+                with open(log_path, "ab", buffering=0) as lf:
+                    lf.write(
+                        f"[{_now_iso()}] job_timeout {job_id} after {timeout_s}s\n".encode("utf-8")
+                    )
+            except Exception:
+                pass
+            job_stop(job_id, wait_ms=0)
+            latest_meta = _read_json(_job_meta_path(job_id)) or meta.copy()
+            latest_meta["timed_out"] = True
+            latest_meta.setdefault("finished_at", _now_iso())
+            _write_json(_job_meta_path(job_id), latest_meta)
+
+        threading.Thread(target=_auto_timeout, name=f"job_timeout_{job_id}", daemon=True).start()
 
     public_base = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
     log_url = f"{public_base}/raw/{meta['log_path']}" if public_base else None
@@ -593,6 +736,9 @@ def job_status(job_id: str) -> Dict[str, Any]:
         "cwd": meta.get("cwd"),
         "name": meta.get("name"),
         "log_path": meta.get("log_path"),
+        "timeout_s": meta.get("timeout_s"),
+        "timeout_at": meta.get("timeout_at"),
+        "timed_out": meta.get("timed_out", False),
     }
 
 
@@ -620,15 +766,39 @@ def job_list(limit: int = 50) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def job_logs(job_id: str, offset: int = 0, max_bytes: int = 200_000, follow_ms: int = 0) -> Dict[str, Any]:
-    """
-    Return a chunk of the job log starting at byte 'offset', and the next_offset.
-    If follow_ms > 0, wait up to that many milliseconds for new data (max ~25s).
+def job_logs(
+    job_id: str,
+    offset: int = 0,
+    max_bytes: int = 200_000,
+    follow_ms: int = 0,
+    tail_lines: Optional[int] = None,
+    squash_repeats: bool = False,
+) -> Dict[str, Any]:
+    """Return a slice of the job log.
+
+    ``offset`` continues to work as before. Pass ``offset=-N`` or ``tail_lines=N``
+    to read the final N lines without tracking byte offsets manually. When
+    ``squash_repeats`` is true, runs of identical lines are summarized to reduce
+    noise. ``follow_ms`` still allows waiting for new data (max ~25s).
     """
 
     logp = _job_log_path(job_id)
     if not logp.exists():
         return {"error": "not_found"}
+
+    if max_bytes <= 0:
+        return {"error": "max_bytes_must_be_positive"}
+
+    if tail_lines is None and offset < 0:
+        tail_lines = abs(offset)
+        offset = 0
+
+    if tail_lines is not None:
+        if not isinstance(tail_lines, int):
+            return {"error": "tail_lines_must_be_int"}
+        if tail_lines > 0:
+            offset = _tail_offset(logp, tail_lines)
+
     wait_deadline = time.time() + min(max(follow_ms, 0), 25_000) / 1000.0
     next_offset = offset
     while True:
@@ -638,9 +808,12 @@ def job_logs(job_id: str, offset: int = 0, max_bytes: int = 200_000, follow_ms: 
                 f.seek(offset)
                 data = f.read(max_bytes)
             next_offset = offset + len(data)
+            text = data.decode("utf-8", errors="replace")
+            if squash_repeats:
+                text = _squash_repeats(text)
             content = {
                 "kind": "text",
-                "text": data.decode("utf-8", errors="replace"),
+                "text": text,
                 "truncated": len(data) == max_bytes,
             }
             st = job_status(job_id)  # returns current running state
@@ -701,6 +874,64 @@ def job_stop(job_id: str, sig: int = 15, kill_children: bool = True, wait_ms: in
         # we can’t reliably get returncode unless we were the parent; leave as-is
         _write_json(_job_meta_path(job_id), meta)
         return {"job_id": job_id, "stopped": True}
+
+
+@mcp.tool()
+def gpu_info() -> Dict[str, Any]:
+    """Return GPU information using ``nvidia-smi`` if available."""
+
+    cmd = [
+        "nvidia-smi",
+        "--query-gpu=index,name,memory.total,memory.used,memory.free",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=5)
+    except FileNotFoundError:
+        return {"available": False, "error": "nvidia_smi_not_found", "gpus": []}
+    except subprocess.TimeoutExpired:
+        return {"available": False, "error": "nvidia_smi_timeout", "gpus": []}
+    except Exception as e:
+        return {"available": False, "error": f"nvidia_smi_failed: {e}", "gpus": []}
+
+    if proc.returncode != 0:
+        err = (proc.stderr or "").strip()
+        return {
+            "available": False,
+            "error": err or f"nvidia_smi_exit_{proc.returncode}",
+            "gpus": [],
+        }
+
+    lines = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+    gpus = []
+
+    def _as_int(val: str) -> Optional[int]:
+        try:
+            return int(float(val))
+        except (TypeError, ValueError):
+            return None
+
+    for idx, line in enumerate(lines):
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 5:
+            gpus.append({"index": idx, "raw": line})
+            continue
+        index_raw, name, mem_total, mem_used, mem_free = parts
+        try:
+            index = int(index_raw)
+        except ValueError:
+            index = index_raw
+        gpus.append(
+            {
+                "index": index,
+                "name": name,
+                "memory_total_mb": _as_int(mem_total),
+                "memory_used_mb": _as_int(mem_used),
+                "memory_free_mb": _as_int(mem_free),
+            }
+        )
+
+    return {"available": bool(gpus), "gpus": gpus}
 
 # --------------------------- ASGI app & gateway -----------------------------
 
