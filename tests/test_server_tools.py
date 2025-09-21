@@ -62,3 +62,22 @@ def test_jsonl_append_atomic(fs_root):
     assert len(lines) == 2
     assert json.loads(lines[0]) == record_a
     assert json.loads(lines[1]) == record_b
+
+
+def test_init_includes_agents_docs(fs_root):
+    root_agents = fs_root / "AGENTS.md"
+    nested_agents = fs_root / "nested" / "AGENTS.md"
+
+    root_agents.write_text("root instructions")
+    nested_agents.parent.mkdir(parents=True, exist_ok=True)
+    nested_agents.write_text("nested instructions")
+
+    result = server.init()
+
+    assert "agents" in result
+    assert {"path": "AGENTS.md", "content": "root instructions"} in result["agents"]
+
+    assert any(
+        entry["path"] == "nested/AGENTS.md" and entry["content"] == "nested instructions"
+        for entry in result["agents"]
+    )
