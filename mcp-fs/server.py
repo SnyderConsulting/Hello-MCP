@@ -7,6 +7,7 @@ import argparse
 import base64
 import contextlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -31,6 +32,21 @@ import uvicorn
 
 ENABLE_WRITE = os.environ.get("MCP_ENABLE_WRITE", "0") == "1"
 ENABLE_EXEC = os.environ.get("MCP_ENABLE_EXEC", "0") == "1"
+
+
+logger = logging.getLogger(__name__)
+
+_LOG_LEVEL = os.environ.get("MCP_FS_LOG_LEVEL")
+if _LOG_LEVEL:
+    level_value: Optional[int]
+    try:
+        level_value = int(_LOG_LEVEL)
+    except ValueError:
+        level_value = getattr(logging, _LOG_LEVEL.upper(), None)
+    if isinstance(level_value, int):
+        logger.setLevel(level_value)
+    else:
+        logger.warning("Invalid MCP_FS_LOG_LEVEL=%r; using existing logger level", _LOG_LEVEL)
 
 
 def _env_path(key: str, default: str) -> str:
@@ -530,12 +546,44 @@ def search(
     Returns: {results:[{path,title,snippet}]}
     Gotchas: Large trees may take time; files over max_file_size are skipped for content scans."""
 
+    search_root = path or "."
+    start_time = time.perf_counter()
+    logger.debug(
+        "search.start query=%r path=%s filename_only=%s case_sensitive=%s max_results=%d include_hidden=%s regex=%s glob=%s max_file_size=%d",
+        query,
+        search_root,
+        filename_only,
+        case_sensitive,
+        max_results,
+        include_hidden,
+        regex,
+        glob,
+        max_file_size,
+    )
+
     try:
-        base = _resolve_path(path or ".")
+        base = _resolve_path(search_root)
     except ValueError as exc:
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "search.complete path=%s results=%d max_results=%d elapsed=%.3fs status=error error=%s",
+            search_root,
+            0,
+            max_results,
+            elapsed,
+            exc,
+        )
         return _error("EPERM", str(exc))
 
     if not base.exists():
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "search.complete path=%s results=%d max_results=%d elapsed=%.3fs status=missing",
+            search_root,
+            0,
+            max_results,
+            elapsed,
+        )
         return {"results": []}
 
     if glob is None:
@@ -554,6 +602,15 @@ def search(
     try:
         pat = re.compile(query if regex else re.escape(query), flags)
     except re.error as exc:
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "search.complete path=%s results=%d max_results=%d elapsed=%.3fs status=invalid-pattern error=%s",
+            search_root,
+            0,
+            max_results,
+            elapsed,
+            exc,
+        )
         return _error("EINVAL", f"Invalid pattern: {exc}")
 
     results: List[Dict[str, Any]] = []
@@ -576,12 +633,25 @@ def search(
                 added = True
             if not added and not filename_only:
                 try:
-                    if p.stat().st_size > max_file_size:
+                    size = p.stat().st_size
+                    if size > max_file_size:
+                        logger.debug(
+                            "search.skip path=%s reason=size size=%d limit=%d",
+                            rel,
+                            size,
+                            max_file_size,
+                        )
                         continue
-                except OSError:
+                except OSError as exc:
+                    logger.debug(
+                        "search.skip path=%s reason=stat-error error=%s",
+                        rel,
+                        exc,
+                    )
                     continue
                 text = _read_text_limited(p, max_file_size)
                 if text is None:
+                    logger.debug("search.skip path=%s reason=binary", rel)
                     continue
                 m = pat.search(text)
                 if m:
@@ -594,7 +664,23 @@ def search(
                     md["snippet"] = snippet
                     results.append(md)
             if len(results) >= max_results:
+                elapsed = time.perf_counter() - start_time
+                logger.info(
+                    "search.complete path=%s results=%d max_results=%d elapsed=%.3fs status=limit",
+                    search_root,
+                    len(results),
+                    max_results,
+                    elapsed,
+                )
                 return {"results": results}
+    elapsed = time.perf_counter() - start_time
+    logger.info(
+        "search.complete path=%s results=%d max_results=%d elapsed=%.3fs",
+        search_root,
+        len(results),
+        max_results,
+        elapsed,
+    )
     return {"results": results}
 
 
