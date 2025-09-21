@@ -34,3 +34,4 @@ The `--enable-exec` flag enables the job tools that launch commands inside the j
 - If your client hides Exec until a tool is marked destructive, annotate `job_start` and `write_file` in server.py with `destructiveHint` (and `openWorldHint` for job_start).
 - `job_start` accepts an optional `timeout_s` to auto-stop runaway processes, and `job_logs` understands `tail_lines`/negative `offset` plus `squash_repeats` to make tailing easier.
 - Use the new `gpu_info` tool to return a lightweight summary from `nvidia-smi` (when available).
+- To enable verbose tracing for filesystem search operations, start the server with `MCP_FS_LOG_LEVEL=DEBUG` (or configure Python logging) to see start/completion timing and skip details in the logs.
