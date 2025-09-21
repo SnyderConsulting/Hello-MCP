@@ -20,7 +20,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, NamedTuple, Optional, Sequence
 
 import hashlib
 
@@ -135,6 +135,38 @@ def read_text_safely(p: Path, max_bytes: int) -> Dict[str, Any]:
         "base64": base64.b64encode(data[:max_bytes]).decode("ascii"),
         "truncated": truncated,
     }
+
+
+class TextReadResult(NamedTuple):
+    text: Optional[str]
+    error: Optional[BaseException]
+    is_binary: bool
+
+
+def _read_text_limited(path: Path, max_bytes: Optional[int]) -> TextReadResult:
+    """Read up to ``max_bytes`` from ``path`` as text.
+
+    Returns ``TextReadResult`` with the decoded text when successful. When the
+    file cannot be read or appears binary, the result contains ``None`` for the
+    text and flags whether it was because of a binary detection or an error.
+    A ``max_bytes`` value of ``None`` or ``<= 0`` disables the limit."""
+
+    limit = max_bytes if max_bytes and max_bytes > 0 else None
+    try:
+        with path.open("rb") as fh:
+            data = fh.read() if limit is None else fh.read(limit)
+    except OSError as exc:
+        return TextReadResult(None, exc, False)
+
+    sample = data[:4096]
+    if not is_probably_text(sample):
+        return TextReadResult(None, None, True)
+
+    try:
+        text = data.decode("utf-8", errors="ignore")
+    except Exception:
+        text = data.decode("latin-1", errors="ignore")
+    return TextReadResult(text, None, False)
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -532,6 +564,7 @@ def search(
     filename_only: bool = False,
     case_sensitive: bool = False,
     max_results: int = 100,
+    max_file_size: Optional[int] = None,
     include_hidden: bool = False,
     regex: bool = False,
     glob: Optional[Sequence[str] | str] = None,
@@ -539,7 +572,8 @@ def search(
     """Search filenames and file content.
     Use glob to narrow scope; tip: switch regex=true for advanced patterns.
     Usage: search(query="error", path="logs", glob=["*.log"], regex=false)
-    Params: query:str, path:str, glob:list[str], regex:bool, max_results:int
+    Params: query:str, path:str, glob:list[str], regex:bool, max_results:int,
+      max_file_size:int|None
     Returns: {results:[{path,title,snippet}]}
     Gotchas: Large trees may take time."""
 
@@ -553,13 +587,22 @@ def search(
 
     start_time = time.perf_counter()
     search_root = path or "."
+    configured_max_file_size = (
+        max_file_size if max_file_size is not None else SEARCH_MAX_FILE_BYTES
+    )
+    if configured_max_file_size and configured_max_file_size > 0:
+        read_limit = configured_max_file_size
+    else:
+        read_limit = None
+    log_max_file_size = read_limit if read_limit is not None else "unlimited"
     logger.debug(
-        "Search started query=%r path=%s filename_only=%s case_sensitive=%s max_results=%d include_hidden=%s regex=%s glob=%s",
+        "Search started query=%r path=%s filename_only=%s case_sensitive=%s max_results=%d max_file_size=%s include_hidden=%s regex=%s glob=%s",
         query,
         search_root,
         filename_only,
         case_sensitive,
         max_results,
+        log_max_file_size,
         include_hidden,
         regex,
         patterns,
@@ -632,12 +675,12 @@ def search(
             except OSError as exc:
                 logger.debug("Skipping %s during search due to stat error: %s", rel, exc)
                 continue
-            if SEARCH_MAX_FILE_BYTES and size > SEARCH_MAX_FILE_BYTES:
+            if read_limit is not None and size > read_limit:
                 logger.debug(
                     "Skipping %s during search: size %s exceeds limit %s",
                     rel,
                     size,
-                    SEARCH_MAX_FILE_BYTES,
+                    read_limit,
                 )
                 continue
             added = False
@@ -649,18 +692,20 @@ def search(
                 results.append(md)
                 added = True
             if not added and not filename_only:
-                try:
-                    data = p.read_bytes()
-                except Exception as exc:
-                    logger.debug("Skipping %s during search due to read error: %s", rel, exc)
+                read_result = _read_text_limited(p, read_limit)
+                if read_result.error is not None:
+                    logger.debug(
+                        "Skipping %s during search due to read error: %s",
+                        rel,
+                        read_result.error,
+                    )
                     continue
-                if not is_probably_text(data[:4096]):
+                if read_result.is_binary:
                     logger.debug("Skipping %s during search (binary detected)", rel)
                     continue
-                try:
-                    text = data.decode("utf-8", errors="ignore")
-                except Exception:
-                    text = data.decode("latin-1", errors="ignore")
+                text = read_result.text
+                if text is None:
+                    continue
                 m = pat.search(text)
                 if m:
                     start = max(0, m.start() - 80)
