@@ -95,6 +95,34 @@ def read_text_safely(p: Path, max_bytes: int) -> Dict[str, Any]:
     }
 
 
+def _read_text_limited(p: Path, max_bytes: int) -> Optional[str]:
+    buffer = bytearray()
+    try:
+        with p.open("rb") as f:
+            sample = f.read(4096)
+            if not is_probably_text(sample):
+                return None
+            f.seek(0)
+            remaining = max_bytes
+            while remaining > 0:
+                chunk = f.read(min(65_536, remaining))
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                remaining -= len(chunk)
+    except Exception:
+        return None
+
+    if not buffer:
+        return ""
+
+    data = bytes(buffer)
+    try:
+        return data.decode("utf-8", errors="ignore")
+    except Exception:
+        return data.decode("latin-1", errors="ignore")
+
+
 def _sha256_bytes(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)
@@ -493,13 +521,14 @@ def search(
     include_hidden: bool = False,
     regex: bool = False,
     glob: Optional[Sequence[str] | str] = None,
+    max_file_size: int = 2_000_000,
 ) -> Dict[str, Any]:
     """Search filenames and file content.
     Use glob to narrow scope; tip: switch regex=true for advanced patterns.
     Usage: search(query="error", path="logs", glob=["*.log"], regex=false)
-    Params: query:str, path:str, glob:list[str], regex:bool, max_results:int
+    Params: query:str, path:str, glob:list[str], regex:bool, max_results:int, max_file_size:int
     Returns: {results:[{path,title,snippet}]}
-    Gotchas: Large trees may take time."""
+    Gotchas: Large trees may take time; files over max_file_size are skipped for content scans."""
 
     try:
         base = _resolve_path(path or ".")
@@ -547,15 +576,13 @@ def search(
                 added = True
             if not added and not filename_only:
                 try:
-                    data = p.read_bytes()
-                except Exception:
+                    if p.stat().st_size > max_file_size:
+                        continue
+                except OSError:
                     continue
-                if not is_probably_text(data[:4096]):
+                text = _read_text_limited(p, max_file_size)
+                if text is None:
                     continue
-                try:
-                    text = data.decode("utf-8", errors="ignore")
-                except Exception:
-                    text = data.decode("latin-1", errors="ignore")
                 m = pat.search(text)
                 if m:
                     start = max(0, m.start() - 80)
