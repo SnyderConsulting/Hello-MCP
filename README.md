@@ -25,6 +25,10 @@ Run from the host (outside the jail). Ensure port 8000 is exposed in the environ
 
 The `--enable-exec` flag enables the job tools that launch commands inside the jail.
 
+### Verbose logging
+
+Set `MCP_FS_LOG_LEVEL=DEBUG` before launching the server to trace search requests and other debug output. For even more detail, you can also set `MCP_FS_SEARCH_MAX_FILE_BYTES` to cap how large a file the search tool will scan (0 keeps the default of no cap).
+
 ## Smoke test (inside MCP via job tools)
 - Exec check: call `job_start` with `cmd=["bash", "-lc", "echo OK"]` and confirm output via `job_logs`.
 - Bridge check: start `job_start` with `cmd=["bash", "-lc", "mcp-bridge/ops.sh self-test"]`.

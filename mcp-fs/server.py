@@ -7,6 +7,7 @@ import argparse
 import base64
 import contextlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -31,6 +32,47 @@ import uvicorn
 
 ENABLE_WRITE = os.environ.get("MCP_ENABLE_WRITE", "0") == "1"
 ENABLE_EXEC = os.environ.get("MCP_ENABLE_EXEC", "0") == "1"
+
+
+def _configure_logger() -> logging.Logger:
+    logger = logging.getLogger(__name__)
+    level_name = os.environ.get("MCP_FS_LOG_LEVEL")
+    if level_name:
+        level = getattr(logging, level_name.upper(), None)
+        if isinstance(level, int):
+            logger.setLevel(level)
+            if not logging.getLogger().handlers:
+                logging.basicConfig(level=level)
+        else:
+            logger.warning(
+                "Unknown MCP_FS_LOG_LEVEL %r. Falling back to default levels.",
+                level_name,
+            )
+    return logger
+
+
+logger = _configure_logger()
+
+def _int_from_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "Invalid integer for %s: %r. Falling back to %d.",
+            name,
+            raw,
+            default,
+        )
+        return default
+
+
+SEARCH_MAX_FILE_BYTES = _int_from_env("MCP_FS_SEARCH_MAX_FILE_BYTES", 0)
 
 
 def _env_path(key: str, default: str) -> str:
@@ -501,20 +543,56 @@ def search(
     Returns: {results:[{path,title,snippet}]}
     Gotchas: Large trees may take time."""
 
-    try:
-        base = _resolve_path(path or ".")
-    except ValueError as exc:
-        return _error("EPERM", str(exc))
-
-    if not base.exists():
-        return {"results": []}
-
+    patterns: List[str]
     if glob is None:
-        patterns: List[str] = []
+        patterns = []
     elif isinstance(glob, str):
         patterns = [glob]
     else:
         patterns = [str(pat) for pat in glob]
+
+    start_time = time.perf_counter()
+    search_root = path or "."
+    logger.debug(
+        "Search started query=%r path=%s filename_only=%s case_sensitive=%s max_results=%d include_hidden=%s regex=%s glob=%s",
+        query,
+        search_root,
+        filename_only,
+        case_sensitive,
+        max_results,
+        include_hidden,
+        regex,
+        patterns,
+    )
+
+    try:
+        base = _resolve_path(search_root)
+    except ValueError as exc:
+        logger.warning("Search path rejected: %s", exc)
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "Search completed path=%s query=%r results=%d max_results=%d elapsed=%.3fs status=%s",
+            search_root,
+            query,
+            0,
+            max_results,
+            elapsed,
+            "error",
+        )
+        return _error("EPERM", str(exc))
+
+    if not base.exists():
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            "Search completed path=%s query=%r results=%d max_results=%d elapsed=%.3fs status=%s",
+            search_root,
+            query,
+            0,
+            max_results,
+            elapsed,
+            "missing",
+        )
+        return {"results": []}
 
     def matches(rel: Path) -> bool:
         if not patterns:
@@ -525,9 +603,21 @@ def search(
     try:
         pat = re.compile(query if regex else re.escape(query), flags)
     except re.error as exc:
+        elapsed = time.perf_counter() - start_time
+        logger.warning("Search pattern rejected: %s", exc)
+        logger.info(
+            "Search completed path=%s query=%r results=%d max_results=%d elapsed=%.3fs status=%s",
+            search_root,
+            query,
+            0,
+            max_results,
+            elapsed,
+            "invalid_pattern",
+        )
         return _error("EINVAL", f"Invalid pattern: {exc}")
 
     results: List[Dict[str, Any]] = []
+    reached_limit = False
     for root, _, files in os.walk(base):
         rootp = Path(root)
         for name in files:
@@ -536,6 +626,19 @@ def search(
                 continue
             rel = p.relative_to(FS_ROOT)
             if not matches(rel):
+                continue
+            try:
+                size = p.stat().st_size
+            except OSError as exc:
+                logger.debug("Skipping %s during search due to stat error: %s", rel, exc)
+                continue
+            if SEARCH_MAX_FILE_BYTES and size > SEARCH_MAX_FILE_BYTES:
+                logger.debug(
+                    "Skipping %s during search: size %s exceeds limit %s",
+                    rel,
+                    size,
+                    SEARCH_MAX_FILE_BYTES,
+                )
                 continue
             added = False
             if pat.search(name):
@@ -548,9 +651,11 @@ def search(
             if not added and not filename_only:
                 try:
                     data = p.read_bytes()
-                except Exception:
+                except Exception as exc:
+                    logger.debug("Skipping %s during search due to read error: %s", rel, exc)
                     continue
                 if not is_probably_text(data[:4096]):
+                    logger.debug("Skipping %s during search (binary detected)", rel)
                     continue
                 try:
                     text = data.decode("utf-8", errors="ignore")
@@ -567,7 +672,21 @@ def search(
                     md["snippet"] = snippet
                     results.append(md)
             if len(results) >= max_results:
-                return {"results": results}
+                reached_limit = True
+                break
+        if reached_limit:
+            break
+
+    elapsed = time.perf_counter() - start_time
+    logger.info(
+        "Search completed path=%s query=%r results=%d max_results=%d elapsed=%.3fs status=%s",
+        search_root,
+        query,
+        len(results),
+        max_results,
+        elapsed,
+        "ok" if not reached_limit else "truncated",
+    )
     return {"results": results}
 
 
