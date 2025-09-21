@@ -190,6 +190,30 @@ def _trash_root_path() -> Path:
     return _resolve_path(TRASH_ROOT_REL)
 
 
+def _gather_agents_docs() -> List[Dict[str, str]]:
+    """Collect AGENTS.md files under FS_ROOT and return their contents."""
+
+    try:
+        candidates = sorted(FS_ROOT.rglob("AGENTS.md"))
+    except Exception:
+        return []
+
+    docs: List[Dict[str, str]] = []
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        try:
+            rel = str(path.relative_to(FS_ROOT))
+        except ValueError:
+            rel = str(path)
+        docs.append({"path": rel, "content": content})
+    return docs
+
+
 @mcp.tool()
 def init(mode: str = "quick", include: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """Initialize the session and surface orientation info.
@@ -280,6 +304,7 @@ def init(mode: str = "quick", include: Optional[Sequence[str]] = None) -> Dict[s
             "log_sink_env": "MCP_LOG_SINK",
         },
         "templates": formatted_templates,
+        "agents": _gather_agents_docs(),
     }
 
 # ------------------------------- FS tooling ---------------------------------
