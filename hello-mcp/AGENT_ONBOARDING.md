@@ -10,7 +10,7 @@
 **I can:**
 - Start long-running processes with `job_start` and return `{job_id, log_path, log_url}` immediately.
 - Tail logs in the current reply using `job_logs(..., tail_lines=N, follow_ms=25000)` for a short window.
-- Read/write files inside FS_ROOT with `read_file`, `write_file`, `list_dir`, `search`, `grep`.
+- Read/write files inside FS_ROOT with `read_file`, `write_file`, `list_dir`, `grep`.
 - Inspect GPUs with `gpu_info`.
 
 **I cannot (without an explicit trigger from you):**
@@ -27,7 +27,7 @@
 - `job_status` / `job_list` — check state later by ID.
 - `job_logs` — stream/tail logs; `follow_ms` allows ~25s of waiting in one reply.
 - `job_stop` — send signals (TERM/KILL) to runaway jobs.
-- `list_dir`, `read_file`, `write_file`, `search`, `grep` — file & content ops in the jail.
+- `list_dir`, `read_file`, `write_file`, `grep` — file & content ops in the jail.
 - `gpu_info` — prove an A100 80GB is present and free.
 - `notes/` — shared, append-only project context and handoffs. (I should write brief worklogs here.)
 

@@ -82,19 +82,3 @@ def test_init_includes_agents_docs(fs_root):
         for entry in result["agents"]
     )
 
-
-def test_search_skips_files_over_max_size(fs_root):
-    search_root = fs_root / "data"
-    search_root.mkdir(parents=True, exist_ok=True)
-
-    big_path = search_root / "big.txt"
-    big_path.write_text("needle" + "x" * 100)
-
-    small_path = search_root / "small.txt"
-    small_path.write_text("needle here")
-
-    result = server.search(query="needle", path="data", max_file_size=16)
-
-    paths = {entry["path"] for entry in result["results"]}
-    assert str(small_path.relative_to(fs_root)) in paths
-    assert str(big_path.relative_to(fs_root)) not in paths
