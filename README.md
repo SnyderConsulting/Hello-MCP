@@ -10,9 +10,9 @@ This directory is the FS_ROOT exposed by your MCP server. It includes a minimal 
 ## Quick start (server)
 Prerequisites:
 
-- Python 3.9+ with the `venv` module available (on Debian/Ubuntu install via `apt install python3 python3-venv`).
+- Python 3.10+ with the `venv` module available (on Debian/Ubuntu install via `apt install python3.10 python3.10-venv`).
 
-The helper script will reuse the active virtualenv if you already have one selected. Otherwise it will create `.venv/` in the repo root on first run and install the server requirements automatically.
+The helper script will reuse the active virtualenv if you already have one selected. Otherwise it will create `.venv/` in the repo root on first run and install the server requirements automatically. When multiple interpreters are installed, the script automatically prefers the newest Python ≥3.10 (e.g. `python3.12`, then `python3.11`, etc.). If only an older interpreter is present, the script exits early with guidance so you can install a compatible Python before retrying.
 
 Run from the host (outside the jail). Ensure port 8000 is exposed in the environment where the server runs so the proxy URL above can reach it. Then run:
 
